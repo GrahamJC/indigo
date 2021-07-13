@@ -74,9 +74,9 @@ typedef struct {
 	int offset_lowest_rn;
 } pihq_private_data;
 
-static indigo_result ccd_enumerate_properties(indigo_device *device, indigo_client *client, indigo_property *property);
+static indigo_result pihq_enumerate_properties(indigo_device *device, indigo_client *client, indigo_property *property);
 
-static indigo_result ccd_attach(indigo_device *device) {
+static indigo_result pihq_attach(indigo_device *device) {
 	assert(device != NULL);
 	assert(PRIVATE_DATA != NULL);
 	if (indigo_ccd_attach(device, DRIVER_NAME, DRIVER_VERSION) == INDIGO_OK) {
@@ -86,7 +86,7 @@ static indigo_result ccd_attach(indigo_device *device) {
 	return INDIGO_FAILED;
 }
 
-static indigo_result ccd_enumerate_properties(indigo_device *device, indigo_client *client, indigo_property *property) {
+static indigo_result pihq_enumerate_properties(indigo_device *device, indigo_client *client, indigo_property *property) {
 	indigo_result result = INDIGO_OK;
 	if ((result = indigo_ccd_enumerate_properties(device, client, property)) == INDIGO_OK) {
 		if (IS_CONNECTED) {
@@ -95,7 +95,7 @@ static indigo_result ccd_enumerate_properties(indigo_device *device, indigo_clie
 	return result;
 }
 
-static void ccd_connect_callback(indigo_device *device) {
+static void pihq_connect_callback(indigo_device *device) {
 	if (CONNECTION_CONNECTED_ITEM->sw.value) {
 		if (!device->is_connected) { /* Do not double open device */
 			if (indigo_try_global_lock(device) != INDIGO_OK) {
@@ -124,18 +124,28 @@ failure:
 	indigo_update_property(device, CONNECTION_PROPERTY, NULL);
 }
 
-static indigo_result ccd_change_property(indigo_device *device, indigo_client *client, indigo_property *property) {
+static indigo_result pihq_change_property(indigo_device *device, indigo_client *client, indigo_property *property) {
 	assert(device != NULL);
 	assert(DEVICE_CONTEXT != NULL);
 	assert(property != NULL);
+	if (indigo_property_match(CONNECTION_PROPERTY, property)) {
+		// -------------------------------------------------------------------------------- CONNECTION
+		if (indigo_ignore_connection_change(device, property))
+			return INDIGO_OK;
+		indigo_property_copy_values(CONNECTION_PROPERTY, property, false);
+		CONNECTION_PROPERTY->state = INDIGO_BUSY_STATE;
+		indigo_update_property(device, CONNECTION_PROPERTY, NULL);
+		indigo_set_timer(device, 0, pihq_connect_callback, NULL);
+		return INDIGO_OK;
+	}
 	return indigo_ccd_change_property(device, client, property);
 }
 
-static indigo_result ccd_detach(indigo_device *device) {
+static indigo_result pihq_detach(indigo_device *device) {
 	assert(device != NULL);
 	if (IS_CONNECTED) {
 		indigo_set_switch(CONNECTION_PROPERTY, CONNECTION_DISCONNECTED_ITEM, true);
-		ccd_connect_callback(device);
+		pihq_connect_callback(device);
 	}
 	INDIGO_DEVICE_DETACH_LOG(DRIVER_NAME, device->name);
 	return indigo_ccd_detach(device);
@@ -148,12 +158,12 @@ static indigo_device *pihq_ccd = NULL;
 indigo_result indigo_ccd_pihq(indigo_driver_action action, indigo_driver_info *info) {
 	static indigo_device ccd_template = INDIGO_DEVICE_INITIALIZER(
 		"Rasppberry Pi HQ Camera",
-		ccd_attach,
-		ccd_enumerate_properties,
-		ccd_change_property,
+		pihq_attach,
+		pihq_enumerate_properties,
+		pihq_change_property,
 		NULL,
-		ccd_detach
-		);
+		pihq_detach
+	);
 	static indigo_driver_action last_action = INDIGO_DRIVER_SHUTDOWN;
 
 	SET_DRIVER_INFO(info, "Raspberry Pi HQ Camera", __FUNCTION__, DRIVER_VERSION, true, last_action);
@@ -168,7 +178,7 @@ indigo_result indigo_ccd_pihq(indigo_driver_action action, indigo_driver_info *i
 			pihq_ccd = indigo_safe_malloc_copy(sizeof(indigo_device), &ccd_template);
 			pihq_ccd->private_data = private_data;
 			indigo_attach_device(pihq_ccd);
-			return INDIGO_FAILED;
+			break;
 
 		case INDIGO_DRIVER_SHUTDOWN:
 			VERIFY_NOT_CONNECTED(pihq_ccd);
